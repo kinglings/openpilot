@@ -14,7 +14,7 @@ from selfdrive.swaglog import cloudlog, add_logentries_handler
 
 
 from common.basedir import BASEDIR
-from common.hardware import HARDWARE, ANDROID, PC
+from selfdrive.hardware import HARDWARE, EON, PC
 WEBCAM = os.getenv("WEBCAM") is not None
 sys.path.append(os.path.join(BASEDIR, "pyextra"))
 os.environ['BASEDIR'] = BASEDIR
@@ -30,7 +30,7 @@ except FileExistsError:
 except PermissionError:
   print("WARNING: failed to make /dev/shm")
 
-if ANDROID:
+if EON:
   os.chmod("/dev/shm", 0o777)
 
 def unblock_stdout():
@@ -107,8 +107,7 @@ if not prebuilt:
         prefix = b'progress: '
         if line.startswith(prefix):
           i = int(line[len(prefix):])
-          if spinner is not None:
-            spinner.update("%d" % (70.0 * (i / TOTAL_SCONS_NODES)))
+          spinner.update("%d" % (70.0 * (i / TOTAL_SCONS_NODES)))
         elif len(line):
           compile_output.append(line)
           print(line.decode('utf8', 'replace'))
@@ -141,10 +140,10 @@ if not prebuilt:
         cloudlog.error("scons build failed\n" + error_s)
 
         # Show TextWindow
+        spinner.close()
         error_s = "\n \n".join(["\n".join(textwrap.wrap(e, 65)) for e in errors])
         with TextWindow("openpilot failed to build\n \n" + error_s) as t:
           t.wait_for_exit()
-
         exit(1)
     else:
       break
@@ -158,7 +157,7 @@ from selfdrive.registration import register
 from selfdrive.version import version, dirty
 from selfdrive.loggerd.config import ROOT
 from selfdrive.launcher import launcher
-from common.apk import update_apks, pm_apply_packages, start_offroad
+from selfdrive.hardware.eon.apk import update_apks, pm_apply_packages, start_offroad
 
 ThermalStatus = cereal.log.ThermalData.ThermalStatus
 
@@ -234,6 +233,7 @@ car_started_processes = [
   'calibrationd',
   'paramsd',
   'camerad',
+  'modeld',
   'proclogd',
   'locationd',
   'clocksd',
@@ -258,15 +258,12 @@ if not PC:
     'dmonitoringmodeld',
   ]
 
-if ANDROID:
+if EON:
   car_started_processes += [
     'gpsd',
     'rtshield',
   ]
 
-# starting dmonitoringmodeld when modeld is initializing can sometimes \
-# result in a weird snpe state where dmon constantly uses more cpu than normal.
-car_started_processes += ['modeld']
 
 def register_managed_process(name, desc, car_started=False):
   global managed_processes, car_started_processes, persistent_processes
@@ -388,7 +385,7 @@ def kill_managed_process(name):
 def cleanup_all_processes(signal, frame):
   cloudlog.info("caught ctrl-c %s %s" % (signal, frame))
 
-  if ANDROID:
+  if EON:
     pm_apply_packages('disable')
 
   for name in list(running.keys()):
@@ -436,7 +433,7 @@ def manager_init(should_register=True):
     pass
 
   # ensure shared libraries are readable by apks
-  if ANDROID:
+  if EON:
     os.chmod(BASEDIR, 0o755)
     os.chmod(os.path.join(BASEDIR, "cereal"), 0o755)
     os.chmod(os.path.join(BASEDIR, "cereal", "libmessaging_shared.so"), 0o755)
@@ -462,7 +459,7 @@ def manager_thread():
     start_managed_process(p)
 
   # start offroad
-  if ANDROID:
+  if EON:
     pm_apply_packages('enable')
     start_offroad()
 
@@ -537,13 +534,6 @@ def uninstall():
   HARDWARE.reboot(reason="recovery")
 
 def main():
-  if ANDROID:
-    # the flippening!
-    os.system('LD_LIBRARY_PATH="" content insert --uri content://settings/system --bind name:s:user_rotation --bind value:i:1')
-
-    # disable bluetooth
-    os.system('service call bluetooth_manager 8')
-
   params = Params()
   params.manager_start()
 
@@ -575,7 +565,7 @@ def main():
   if params.get("Passive") is None:
     raise Exception("Passive must be set to continue")
 
-  if ANDROID:
+  if EON:
     update_apks()
   manager_init()
   manager_prepare(spinner)
@@ -609,6 +599,7 @@ if __name__ == "__main__":
     # Show last 3 lines of traceback
     error = traceback.format_exc(-3)
     error = "Manager failed to start\n \n" + error
+    spinner.close()
     with TextWindow(error) as t:
       t.wait_for_exit()
 
